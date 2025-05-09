@@ -1,9 +1,10 @@
 import axios from 'axios';
 
 // Use environment variable for API URL with fallback to local development URL
-// const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 const API_URL = import.meta.env.VITE_API_URL || 'https://cineconnect-api.onrender.com/api';
 const TMDB_IMAGE_BASE_URL = 'https://image.tmdb.org/t/p';
+
+console.log('API URL:', API_URL); // Debug API URL
 
 // Create axios instance
 const api = axios.create({
@@ -11,6 +12,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 15000, // 15 second timeout
 });
 
 // Set auth token for all requests if exists
@@ -22,16 +24,37 @@ api.interceptors.request.use(
 
     if (user && user.token) {
       config.headers.Authorization = `Bearer ${user.token}`;
+      // Log truncated token for debugging (don't log full token for security)
+      console.log(`Adding auth token to ${config.url}: ${user.token.substring(0, 10)}...`);
+    } else {
+      console.log(`No auth token for request to ${config.url}`);
     }
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => {
+    console.error('Request interceptor error:', error);
+    return Promise.reject(error);
+  }
 );
 
 // Add response interceptor to handle auth errors
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Log error for debugging
+    console.error(`API Error (${error.config?.url}):`, error.message);
+
+    if (error.code === 'ECONNABORTED') {
+      console.error('Request timeout - server may be down');
+      return Promise.reject(new Error('Server request timed out. Please try again later.'));
+    }
+
+    // Network error
+    if (!error.response) {
+      console.error('Network error - no response received');
+      return Promise.reject(new Error('Network error. Please check your connection and try again.'));
+    }
+
     // Check for auth errors
     if (error.response) {
       // Case 1: Direct invalid signature error
@@ -41,19 +64,21 @@ api.interceptors.response.use(
         error.response.data?.message?.includes("Not authorized");
 
       // Case 2: 401 Unauthorized status
-      if (error.response.status === 401 && hasInvalidSignature) {
-        console.error("JWT authentication error detected - logging out automatically", error.response.data);
+      if (error.response.status === 401) {
+        console.error("Auth error detected:", error.response.data);
 
         // Clear user data from localStorage
         localStorage.removeItem("user");
 
         // Set detailed error message to display on login screen
         localStorage.setItem("auth_error",
-          `Authentication failed: ${error.response.data?.message || 'Invalid token signature'}. Please log in again.`);
+          `Authentication failed: ${error.response.data?.message || 'Session expired'}. Please log in again.`);
 
-        // Force page reload to login page
-        window.location.href = "/login";
-        return Promise.reject(new Error("Authentication failed. Redirecting to login..."));
+        // Only redirect if not already on login page to prevent redirect loops
+        if (!window.location.pathname.includes('/login')) {
+          window.location.href = "/login";
+          return Promise.reject(new Error("Authentication failed. Redirecting to login..."));
+        }
       }
     }
 

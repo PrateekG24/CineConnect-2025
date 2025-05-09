@@ -15,13 +15,22 @@ const Profile = ({ user, updateUser }) => {
   const [success, setSuccess] = useState(null);
   const [error, setError] = useState(null);
   const [profileData, setProfileData] = useState(null);
+  const [fetchError, setFetchError] = useState(null);
 
   // Fetch the latest user data from the server
   useEffect(() => {
     const fetchUserProfile = async () => {
       try {
         setFetchingProfile(true);
+        setFetchError(null);
+
+        console.log(
+          "Fetching user profile with token:",
+          user?.token?.substring(0, 10) + "..."
+        );
+
         const response = await userAPI.getProfile();
+        console.log("Profile data received:", response.data);
         setProfileData(response.data);
 
         // Update user in localStorage with the latest data from server
@@ -37,6 +46,20 @@ const Profile = ({ user, updateUser }) => {
         }
       } catch (err) {
         console.error("Error fetching profile:", err);
+        const errorMessage =
+          err.response?.data?.message ||
+          "Failed to load profile data. Please try logging in again.";
+        setFetchError(errorMessage);
+
+        // If there's an authentication error, clear user data and redirect to login
+        if (err.response?.status === 401) {
+          localStorage.removeItem("user");
+          localStorage.setItem(
+            "auth_error",
+            "Your session has expired. Please log in again."
+          );
+          window.location.href = "/login";
+        }
       } finally {
         setFetchingProfile(false);
       }
@@ -44,6 +67,9 @@ const Profile = ({ user, updateUser }) => {
 
     if (user) {
       fetchUserProfile();
+    } else {
+      setFetchingProfile(false);
+      setFetchError("User not logged in");
     }
   }, [user, updateUser]);
 
@@ -178,6 +204,26 @@ const Profile = ({ user, updateUser }) => {
           <div className="center-content">
             <LoadingSpinner />
             <p>Loading your profile data...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <div className="auth-container">
+        <div className="auth-card profile-card">
+          <h1>My Profile</h1>
+          <div className="center-content">
+            <Alert type="danger" message={fetchError} />
+            <button
+              className="btn btn-primary"
+              onClick={() => (window.location.href = "/login")}
+              style={{ marginTop: "20px" }}
+            >
+              Return to Login
+            </button>
           </div>
         </div>
       </div>

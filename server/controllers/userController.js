@@ -1,7 +1,7 @@
 const User = require('../models/User');
 const { generateToken, generateRandomToken } = require('../utils/generateToken');
 const emailService = require('../services/emailService');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 
 // @desc    Register a new user
 // @route   POST /api/users/register

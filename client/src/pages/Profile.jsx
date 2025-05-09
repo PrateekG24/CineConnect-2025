@@ -26,6 +26,26 @@ const styles = {
     transform: "rotate(180deg)",
     background: "rgba(229, 9, 20, 0.1)",
   },
+  pendingChangesAlert: {
+    backgroundColor: "#e3f2fd",
+    border: "1px solid #2196f3",
+    marginTop: "10px",
+    marginBottom: "20px",
+    padding: "10px 15px",
+    borderRadius: "4px",
+  },
+  formDisabled: {
+    opacity: "0.7",
+    pointerEvents: "none",
+  },
+  formNotice: {
+    backgroundColor: "#fff3cd",
+    color: "#856404",
+    padding: "10px",
+    borderRadius: "4px",
+    marginBottom: "20px",
+    fontSize: "0.9rem",
+  },
 };
 
 const Profile = ({ user, updateUser }) => {
@@ -91,19 +111,16 @@ const Profile = ({ user, updateUser }) => {
         profileFetched.current = true;
 
         // Update user in localStorage with the latest data from server
-        // But don't trigger another render cycle by updating the context state
         if (updateUser) {
           const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
           const updatedUser = {
             ...currentUser,
             isEmailVerified: response.data.isEmailVerified,
-            pendingEmail: response.data.pendingEmail || null,
           };
           localStorage.setItem("user", JSON.stringify(updatedUser));
           // Only update app state if needed values are different to prevent loop
           const needsUpdate =
-            currentUser.isEmailVerified !== response.data.isEmailVerified ||
-            currentUser.pendingEmail !== response.data.pendingEmail;
+            currentUser.isEmailVerified !== response.data.isEmailVerified;
 
           if (needsUpdate) {
             updateUser(updatedUser);
@@ -198,7 +215,6 @@ const Profile = ({ user, updateUser }) => {
           ...user,
           username: response.data.username || user.username,
           email: response.data.email || user.email,
-          pendingEmail: response.data.pendingEmail || null,
           isEmailVerified: response.data.isEmailVerified,
         };
 
@@ -212,7 +228,6 @@ const Profile = ({ user, updateUser }) => {
           ...prevData,
           username: response.data.username || prevData.username,
           email: response.data.email || prevData.email,
-          pendingEmail: response.data.pendingEmail || null,
           isEmailVerified: response.data.isEmailVerified,
         }));
       }
@@ -252,19 +267,25 @@ const Profile = ({ user, updateUser }) => {
     }
   };
 
-  // Use server-side verification status rather than cached data
+  // Use server-side verification status to determine verification alert
   const isVerified = profileData
     ? profileData.isEmailVerified
     : user?.isEmailVerified;
-  const pendingEmailChange = profileData
-    ? profileData.pendingEmail
-    : user?.pendingEmail;
 
-  // Determine if verification message should be shown based on latest data
-  const shouldShowVerification = !isVerified || pendingEmailChange;
-  const verificationMessage = pendingEmailChange
-    ? `Verification email sent to ${pendingEmailChange}. Please check your inbox.`
-    : "Your email is not verified. Please check your inbox for verification email.";
+  // Check for pending profile changes
+  const hasPendingChanges = profileData?.pendingChanges?.changeType || false;
+
+  // Determine if verification message should be shown
+  const shouldShowVerification = !isVerified;
+
+  // Verification message based on whether it's for initial email verification or pending changes
+  const verificationMessage =
+    "Your email is not verified. Please check your inbox for verification email.";
+
+  // Message for pending changes
+  const pendingChangesMessage = hasPendingChanges
+    ? `You have pending changes that require verification. Please check your email for a verification link.`
+    : null;
 
   if (fetchingProfile) {
     return (
@@ -341,10 +362,42 @@ const Profile = ({ user, updateUser }) => {
           </div>
         )}
 
+        {hasPendingChanges && (
+          <div
+            style={styles.pendingChangesAlert}
+            className="verification-alert pending-changes-alert"
+          >
+            <Alert type="info" message={pendingChangesMessage} />
+            <button
+              className="resend-btn"
+              onClick={handleResendVerification}
+              disabled={resendingVerification}
+            >
+              {resendingVerification ? (
+                <LoadingSpinner small />
+              ) : (
+                "Resend verification email"
+              )}
+            </button>
+          </div>
+        )}
+
         {error && <Alert type="danger" message={error} />}
         {success && <Alert type="success" message={success} />}
 
-        <form onSubmit={handleSubmit}>
+        <form
+          onSubmit={handleSubmit}
+          style={hasPendingChanges ? styles.formDisabled : {}}
+        >
+          {hasPendingChanges && (
+            <div style={styles.formNotice} className="form-notice">
+              <p>
+                Form editing is disabled while you have pending changes. Please
+                verify your changes or refresh to cancel.
+              </p>
+            </div>
+          )}
+
           <div className="form-group">
             <label htmlFor="username">Username</label>
             <input
@@ -352,7 +405,7 @@ const Profile = ({ user, updateUser }) => {
               id="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              disabled={loading}
+              disabled={loading || hasPendingChanges}
             />
           </div>
 
@@ -364,22 +417,19 @@ const Profile = ({ user, updateUser }) => {
                 id="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                disabled={loading}
+                disabled={loading || hasPendingChanges}
               />
-              {isVerified && !pendingEmailChange && (
-                <span className="verified-badge">✓ Verified</span>
-              )}
+              {isVerified && <span className="verified-badge">✓ Verified</span>}
             </div>
-            {pendingEmailChange && (
-              <div className="pending-email-note">
-                Pending change to: {pendingEmailChange}
-              </div>
-            )}
           </div>
 
           <div className="form-group">
             <label htmlFor="currentPassword">Current Password</label>
-            <input type="password" id="currentPassword" disabled={loading} />
+            <input
+              type="password"
+              id="currentPassword"
+              disabled={loading || hasPendingChanges}
+            />
           </div>
 
           <div className="form-group">
@@ -391,7 +441,7 @@ const Profile = ({ user, updateUser }) => {
               id="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              disabled={loading}
+              disabled={loading || hasPendingChanges}
             />
           </div>
 
@@ -402,11 +452,15 @@ const Profile = ({ user, updateUser }) => {
               id="confirmPassword"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              disabled={loading}
+              disabled={loading || hasPendingChanges}
             />
           </div>
 
-          <button type="submit" className="primary-btn" disabled={loading}>
+          <button
+            type="submit"
+            className="primary-btn"
+            disabled={loading || hasPendingChanges}
+          >
             {loading ? <LoadingSpinner small /> : "Update Profile"}
           </button>
         </form>

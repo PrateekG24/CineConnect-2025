@@ -24,11 +24,28 @@ const userSchema = new mongoose.Schema({
     required: [true, 'Password is required'],
     minlength: [6, 'Password must be at least 6 characters']
   },
-  pendingEmail: {
-    type: String,
-    default: null,
-    trim: true,
-    lowercase: true
+  // Fields for pending changes requiring verification
+  pendingChanges: {
+    username: {
+      type: String,
+      default: null,
+      trim: true
+    },
+    email: {
+      type: String,
+      default: null,
+      trim: true,
+      lowercase: true
+    },
+    password: {
+      type: String,
+      default: null
+    },
+    changeType: {
+      type: String,
+      enum: ['username', 'email', 'password', 'multiple', null],
+      default: null
+    }
   },
   emailVerificationToken: {
     type: String,

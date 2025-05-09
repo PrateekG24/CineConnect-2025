@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const { generateToken, generateRandomToken } = require('../utils/generateToken');
 const emailService = require('../services/emailService');
+const bcrypt = require('bcrypt');
 
 // @desc    Register a new user
 // @route   POST /api/users/register
@@ -109,7 +110,23 @@ const updateUserProfile = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Handle email update with verification
+    // Check if there are pending changes already
+    if (user.pendingChanges.changeType) {
+      return res.status(400).json({
+        message: 'You have pending changes that require verification. Please check your email or request a new verification link.'
+      });
+    }
+
+    // Track what kind of changes are being made
+    let hasChanges = false;
+    let changeType = null;
+    const pendingChanges = {
+      username: null,
+      email: null,
+      password: null
+    };
+
+    // Handle email change
     if (req.body.email && req.body.email !== user.email) {
       // Check if email is already taken
       const emailExists = await User.findOne({ email: req.body.email });
@@ -117,56 +134,25 @@ const updateUserProfile = async (req, res) => {
         return res.status(400).json({ message: 'Email is already in use' });
       }
 
-      // Generate verification token for new email
-      const emailVerificationToken = generateRandomToken();
-      const emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
-
-      // Store pending email and verification data
-      user.pendingEmail = req.body.email;
-      user.emailVerificationToken = emailVerificationToken;
-      user.emailVerificationExpires = emailVerificationExpires;
-
-      try {
-        // Send verification email to the new address
-        await emailService.sendVerificationEmail(user, emailVerificationToken, req.body.email);
-
-        await user.save();
-
-        res.json({
-          _id: user._id,
-          username: user.username,
-          email: user.email,
-          pendingEmail: user.pendingEmail,
-          isEmailVerified: user.isEmailVerified,
-          message: 'Verification email sent to your new email address. Please verify to complete the update.'
-        });
-      } catch (emailError) {
-        console.error('Error sending verification email:', emailError);
-
-        // Reset verification fields if email fails
-        user.pendingEmail = null;
-        user.emailVerificationToken = null;
-        user.emailVerificationExpires = null;
-        await user.save();
-
-        return res.status(500).json({
-          message: 'Could not send verification email. Please try again later.'
-        });
-      }
-      return;
+      pendingChanges.email = req.body.email;
+      changeType = 'email';
+      hasChanges = true;
     }
 
-    // Handle username update
+    // Handle username change
     if (req.body.username && req.body.username !== user.username) {
       // Check if username is already taken
       const usernameExists = await User.findOne({ username: req.body.username });
       if (usernameExists) {
         return res.status(400).json({ message: 'Username is already taken' });
       }
-      user.username = req.body.username;
+
+      pendingChanges.username = req.body.username;
+      changeType = changeType ? 'multiple' : 'username';
+      hasChanges = true;
     }
 
-    // Handle password update - requires current password
+    // Handle password change - requires current password
     if (req.body.newPassword) {
       if (!req.body.currentPassword) {
         return res.status(400).json({ message: 'Current password is required' });
@@ -178,21 +164,94 @@ const updateUserProfile = async (req, res) => {
         return res.status(401).json({ message: 'Current password is incorrect' });
       }
 
-      // Set new password
-      user.password = req.body.newPassword;
+      // Hash the new password for storage in pending changes
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(req.body.newPassword, salt);
+
+      pendingChanges.password = hashedPassword;
+      changeType = changeType ? 'multiple' : 'password';
+      hasChanges = true;
     }
 
-    // Save user changes
+    // Don't proceed if no changes
+    if (!hasChanges) {
+      return res.status(400).json({ message: 'No changes were requested' });
+    }
+
+    // Generate verification token
+    const emailVerificationToken = generateRandomToken();
+    const emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+    // Set pending changes and verification data
+    user.pendingChanges = {
+      ...pendingChanges,
+      changeType
+    };
+    user.emailVerificationToken = emailVerificationToken;
+    user.emailVerificationExpires = emailVerificationExpires;
+
+    // Save the user with pending changes
     await user.save();
 
-    // Send updated user data
-    res.json({
-      _id: user._id,
-      username: user.username,
-      email: user.email,
-      isEmailVerified: user.isEmailVerified,
-      message: 'Profile updated successfully'
-    });
+    try {
+      // Send verification email
+      // Determine where to send the verification email (current email or new email if changing)
+      const emailTarget = pendingChanges.email || user.email;
+
+      // Customize message based on change type
+      let changeMessage;
+      switch (changeType) {
+        case 'username':
+          changeMessage = `username to "${pendingChanges.username}"`;
+          break;
+        case 'email':
+          changeMessage = `email to "${pendingChanges.email}"`;
+          break;
+        case 'password':
+          changeMessage = 'password';
+          break;
+        case 'multiple':
+          changeMessage = 'profile information';
+          break;
+      }
+
+      await emailService.sendProfileVerificationEmail(
+        user,
+        emailVerificationToken,
+        emailTarget,
+        changeType,
+        pendingChanges
+      );
+
+      res.json({
+        _id: user._id,
+        username: user.username,
+        email: user.email,
+        isEmailVerified: user.isEmailVerified,
+        pendingChanges: {
+          hasChanges: true,
+          changeType
+        },
+        message: `A verification email has been sent to ${emailTarget}. Please verify to apply your changes to ${changeMessage}.`
+      });
+    } catch (emailError) {
+      console.error('Error sending verification email:', emailError);
+
+      // Reset verification fields if email fails
+      user.pendingChanges = {
+        username: null,
+        email: null,
+        password: null,
+        changeType: null
+      };
+      user.emailVerificationToken = null;
+      user.emailVerificationExpires = null;
+      await user.save();
+
+      return res.status(500).json({
+        message: 'Could not send verification email. Please try again later.'
+      });
+    }
   } catch (error) {
     console.error('Update profile error:', error);
     res.status(500).json({ message: 'Server error during profile update' });
@@ -217,17 +276,42 @@ const verifyEmail = async (req, res) => {
       });
     }
 
-    // If this is a new account verification
-    if (!user.isEmailVerified && !user.pendingEmail) {
+    // Handle initial account verification
+    if (!user.isEmailVerified && !user.pendingChanges.changeType) {
       user.isEmailVerified = true;
     }
 
-    // If this is an email change verification
-    if (user.pendingEmail) {
-      // Update email
-      user.email = user.pendingEmail;
-      user.pendingEmail = null;
-      user.isEmailVerified = true;
+    // Handle profile changes verification
+    if (user.pendingChanges && user.pendingChanges.changeType) {
+      const { pendingChanges } = user;
+
+      // Apply username change if requested
+      if (pendingChanges.username) {
+        user.username = pendingChanges.username;
+      }
+
+      // Apply email change if requested
+      if (pendingChanges.email) {
+        user.email = pendingChanges.email;
+      }
+
+      // Apply password change if requested
+      if (pendingChanges.password) {
+        user.password = pendingChanges.password; // Already hashed
+      }
+
+      // Clear pending changes
+      user.pendingChanges = {
+        username: null,
+        email: null,
+        password: null,
+        changeType: null
+      };
+
+      // Email is considered verified if profile changes are verified
+      if (!user.isEmailVerified) {
+        user.isEmailVerified = true;
+      }
     }
 
     // Clear verification data
@@ -236,13 +320,19 @@ const verifyEmail = async (req, res) => {
 
     await user.save();
 
+    // Determine appropriate success message
+    let message = 'Email verified successfully';
+    if (user.pendingChanges && user.pendingChanges.changeType) {
+      message = 'Profile changes applied successfully';
+    }
+
     res.json({
       success: true,
-      message: 'Email verified successfully'
+      message: message
     });
   } catch (error) {
     console.error('Email verification error:', error);
-    res.status(500).json({ message: 'Server error during email verification' });
+    res.status(500).json({ message: 'Server error during verification' });
   }
 };
 
@@ -257,8 +347,12 @@ const resendVerificationEmail = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Determine target email (pending or current)
-    const targetEmail = user.pendingEmail || user.email;
+    // Only allow resending verification for unverified accounts
+    if (user.isEmailVerified) {
+      return res.status(400).json({
+        message: 'Your email is already verified'
+      });
+    }
 
     // Generate new verification token
     const emailVerificationToken = generateRandomToken();
@@ -272,7 +366,7 @@ const resendVerificationEmail = async (req, res) => {
 
     try {
       // Send verification email
-      await emailService.sendVerificationEmail(user, emailVerificationToken, targetEmail);
+      await emailService.sendVerificationEmail(user, emailVerificationToken, user.email);
 
       res.json({
         message: 'Verification email has been sent'

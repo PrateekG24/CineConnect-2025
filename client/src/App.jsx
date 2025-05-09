@@ -14,6 +14,7 @@ import Watchlist from "./pages/Watchlist";
 import MyReviews from "./pages/MyReviews";
 import Profile from "./pages/Profile";
 import VerifyEmail from "./pages/VerifyEmail";
+import VerifyProfileChanges from "./pages/VerifyProfileChanges";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 import "./App.css";
@@ -190,6 +191,10 @@ function App() {
                   <MyReviews />
                 </ProtectedRoute>
               }
+            />
+            <Route
+              path="/verify-profile-changes/:token"
+              element={<VerifyProfileChanges />}
             />
             <Route path="*" element={<NotFound />} />
           </Routes>

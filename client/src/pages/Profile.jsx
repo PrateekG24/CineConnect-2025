@@ -1,8 +1,32 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { userAPI } from "../services/api";
 import LoadingSpinner from "../components/LoadingSpinner";
 import Alert from "../components/Alert";
 import "./Auth.css";
+
+// Add inline styles for new elements
+const styles = {
+  profileHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: "20px",
+  },
+  refreshBtn: {
+    background: "transparent",
+    border: "none",
+    color: "#e50914",
+    fontSize: "24px",
+    cursor: "pointer",
+    padding: "5px 10px",
+    borderRadius: "50%",
+    transition: "transform 0.3s ease",
+  },
+  refreshBtnHover: {
+    transform: "rotate(180deg)",
+    background: "rgba(229, 9, 20, 0.1)",
+  },
+};
 
 const Profile = ({ user, updateUser }) => {
   const [username, setUsername] = useState("");
@@ -16,10 +40,42 @@ const Profile = ({ user, updateUser }) => {
   const [error, setError] = useState(null);
   const [profileData, setProfileData] = useState(null);
   const [fetchError, setFetchError] = useState(null);
+  const profileFetched = useRef(false);
+
+  // Function to manually refresh profile data
+  const refreshProfileData = async () => {
+    try {
+      setFetchingProfile(true);
+      setFetchError(null);
+      profileFetched.current = false;
+
+      console.log("Manually refreshing profile data...");
+
+      const response = await userAPI.getProfile();
+      console.log("Fresh profile data received:", response.data);
+      setProfileData(response.data);
+      profileFetched.current = true;
+
+      return true;
+    } catch (err) {
+      console.error("Error refreshing profile:", err);
+      setFetchError(
+        err.response?.data?.message ||
+          "Failed to refresh profile data. Please try again."
+      );
+
+      return false;
+    } finally {
+      setFetchingProfile(false);
+    }
+  };
 
   // Fetch the latest user data from the server
   useEffect(() => {
     const fetchUserProfile = async () => {
+      // Prevent duplicate fetches
+      if (profileFetched.current) return;
+
       try {
         setFetchingProfile(true);
         setFetchError(null);
@@ -32,8 +88,10 @@ const Profile = ({ user, updateUser }) => {
         const response = await userAPI.getProfile();
         console.log("Profile data received:", response.data);
         setProfileData(response.data);
+        profileFetched.current = true;
 
         // Update user in localStorage with the latest data from server
+        // But don't trigger another render cycle by updating the context state
         if (updateUser) {
           const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
           const updatedUser = {
@@ -42,7 +100,14 @@ const Profile = ({ user, updateUser }) => {
             pendingEmail: response.data.pendingEmail || null,
           };
           localStorage.setItem("user", JSON.stringify(updatedUser));
-          updateUser(updatedUser);
+          // Only update app state if needed values are different to prevent loop
+          const needsUpdate =
+            currentUser.isEmailVerified !== response.data.isEmailVerified ||
+            currentUser.pendingEmail !== response.data.pendingEmail;
+
+          if (needsUpdate) {
+            updateUser(updatedUser);
+          }
         }
       } catch (err) {
         console.error("Error fetching profile:", err);
@@ -50,6 +115,7 @@ const Profile = ({ user, updateUser }) => {
           err.response?.data?.message ||
           "Failed to load profile data. Please try logging in again.";
         setFetchError(errorMessage);
+        profileFetched.current = true;
 
         // If there's an authentication error, clear user data and redirect to login
         if (err.response?.status === 401) {
@@ -65,13 +131,14 @@ const Profile = ({ user, updateUser }) => {
       }
     };
 
-    if (user) {
+    if (user && !profileFetched.current) {
       fetchUserProfile();
-    } else {
+    } else if (!user) {
       setFetchingProfile(false);
       setFetchError("User not logged in");
+      profileFetched.current = true;
     }
-  }, [user, updateUser]);
+  }, [user]); // Remove updateUser from dependency array
 
   // Initialize form with user data
   useEffect(() => {
@@ -139,12 +206,15 @@ const Profile = ({ user, updateUser }) => {
         updateUser(updatedUser);
       }
 
-      // Refresh profile data
-      try {
-        const profileResponse = await userAPI.getProfile();
-        setProfileData(profileResponse.data);
-      } catch (err) {
-        console.error("Error refreshing profile data:", err);
+      // Refresh profile data directly instead of making another API call
+      if (response.data) {
+        setProfileData((prevData) => ({
+          ...prevData,
+          username: response.data.username || prevData.username,
+          email: response.data.email || prevData.email,
+          pendingEmail: response.data.pendingEmail || null,
+          isEmailVerified: response.data.isEmailVerified,
+        }));
       }
 
       setSuccess(response.data.message || "Profile updated successfully");
@@ -233,7 +303,26 @@ const Profile = ({ user, updateUser }) => {
   return (
     <div className="auth-container">
       <div className="auth-card profile-card">
-        <h1>My Profile</h1>
+        <div style={styles.profileHeader}>
+          <h1>My Profile</h1>
+
+          {!fetchingProfile && (
+            <button
+              style={styles.refreshBtn}
+              onClick={refreshProfileData}
+              title="Refresh profile data"
+              onMouseOver={(e) => {
+                Object.assign(e.target.style, styles.refreshBtnHover);
+              }}
+              onMouseOut={(e) => {
+                e.target.style.transform = "none";
+                e.target.style.background = "transparent";
+              }}
+            >
+              ↻
+            </button>
+          )}
+        </div>
 
         {shouldShowVerification && (
           <div className="verification-alert">
